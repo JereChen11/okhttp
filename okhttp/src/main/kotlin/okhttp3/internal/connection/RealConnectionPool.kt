@@ -33,6 +33,7 @@ import okhttp3.internal.platform.Platform
 class RealConnectionPool(
   taskRunner: TaskRunner,
   /** The maximum number of idle connections for each address. */
+  //最大空闲连接数
   private val maxIdleConnections: Int,
   keepAliveDuration: Long,
   timeUnit: TimeUnit
@@ -80,10 +81,14 @@ class RealConnectionPool(
     routes: List<Route>?,
     requireMultiplexed: Boolean
   ): Boolean {
+    //遍历连接池
     for (connection in connections) {
       synchronized(connection) {
+        //判断连接是否支持多路复用
         if (requireMultiplexed && !connection.isMultiplexed) return@synchronized
+        //判断连接是否合格
         if (!connection.isEligible(address, routes)) return@synchronized
+        //从连接池中找到可复用的合格连接，return true
         call.acquireConnectionNoEvents(connection)
         return true
       }
@@ -143,9 +148,13 @@ class RealConnectionPool(
    * Returns -1 if no further cleanups are required.
    */
   fun cleanup(now: Long): Long {
+    //正在使用连接数
     var inUseConnectionCount = 0
+    //空闲连接数
     var idleConnectionCount = 0
+    //空闲时间最长的连接
     var longestIdleConnection: RealConnection? = null
+    //最长的空闲事件
     var longestIdleDurationNs = Long.MIN_VALUE
 
     // Find either a connection to evict, or the time that the next eviction is due.
@@ -153,12 +162,15 @@ class RealConnectionPool(
       synchronized(connection) {
         // If the connection is in use, keep searching.
         if (pruneAndGetAllocationCount(connection, now) > 0) {
+          //如果连接正在使用，则将正在使用连接数+1
           inUseConnectionCount++
         } else {
+          //否则，将空闲连接数+1
           idleConnectionCount++
 
           // If the connection is ready to be evicted, we're done.
           val idleDurationNs = now - connection.idleAtNs
+          //找出空闲时间最长的连接，重新赋值
           if (idleDurationNs > longestIdleDurationNs) {
             longestIdleDurationNs = idleDurationNs
             longestIdleConnection = connection
@@ -168,6 +180,7 @@ class RealConnectionPool(
     }
 
     when {
+      //当闲置连接超过最大闲置连接数时，或者某个闲置连接闲置时间超出了最长闲置时间，清理
       longestIdleDurationNs >= this.keepAliveDurationNs
           || idleConnectionCount > this.maxIdleConnections -> {
         // We've chosen a connection to evict. Confirm it's still okay to be evict, then close it.
@@ -188,17 +201,20 @@ class RealConnectionPool(
 
       idleConnectionCount > 0 -> {
         // A connection will be ready to evict soon.
+        //如果有闲置连接，但是闲置时间还没达到最长闲置时间，就返回距离最长闲置时间的剩余时间差，等达到了再来清理
         return keepAliveDurationNs - longestIdleDurationNs
       }
 
       inUseConnectionCount > 0 -> {
         // All connections are in use. It'll be at least the keep alive duration 'til we run
         // again.
+        //所有连接都在使用，没有空闲连接，不需要清理
         return keepAliveDurationNs
       }
 
       else -> {
         // No connections, idle or in use.
+        // 没有任何空闲或者使用的连接，不需要清理
         return -1
       }
     }

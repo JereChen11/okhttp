@@ -32,21 +32,27 @@ interface ExchangeCodec {
   @Throws(IOException::class)
   fun createRequestBody(request: Request, contentLength: Long): Sink
 
-  /** This should update the HTTP engine's sentRequestMillis field. */
+  /** This should update the HTTP engine's sentRequestMillis field.
+   *
+   * */
   @Throws(IOException::class)
   fun writeRequestHeaders(request: Request)
 
-  /** Flush the request to the underlying socket. */
+  /** Flush the request to the underlying socket.
+   * 将请求刷新发送给底层socket
+   * */
   @Throws(IOException::class)
   fun flushRequest()
 
-  /** Flush the request to the underlying socket and signal no more bytes will be transmitted. */
+  /** Flush the request to the underlying socket and signal no more bytes will be transmitted.
+   * 将请求刷新到底层socket，然后不再发送字节信号。
+   * */
   @Throws(IOException::class)
   fun finishRequest()
 
   /**
    * Parses bytes of a response header from an HTTP transport.
-   *
+   * 解析来自HTTP传输的响应头的字节。
    * @param expectContinue true to return null if this is an intermediate response with a "100"
    * response code. Otherwise this method never returns null.
    */

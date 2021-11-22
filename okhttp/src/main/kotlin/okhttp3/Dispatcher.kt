@@ -30,6 +30,7 @@ import okhttp3.internal.threadFactory
 
 /**
  * Policy on when async requests are executed.
+ * 调度器，用来调度Call对象，同时包含线程池与异步请求队列，用来存放与执行AsyncCall对象。
  *
  * Each dispatcher uses an [ExecutorService] to run calls internally. If you supply your own
  * executor, it should be able to run [the configured maximum][maxRequests] number of calls
@@ -39,6 +40,7 @@ class Dispatcher constructor() {
   /**
    * The maximum number of requests to execute concurrently. Above this requests queue in memory,
    * waiting for the running calls to complete.
+   * 并发执行的最大请求数。
    *
    * If more than [maxRequests] requests are in flight when this is invoked, those requests will
    * remain in flight.
@@ -92,6 +94,7 @@ class Dispatcher constructor() {
   @get:JvmName("executorService") val executorService: ExecutorService
     get() {
       if (executorServiceOrNull == null) {
+        //创建一个缓存线程池，来处理请求调用
         executorServiceOrNull = ThreadPoolExecutor(0, Int.MAX_VALUE, 60, TimeUnit.SECONDS,
             SynchronousQueue(), threadFactory("$okHttpName Dispatcher", false))
       }
@@ -99,6 +102,7 @@ class Dispatcher constructor() {
     }
 
   /** Ready async calls in the order they'll be run. */
+  @get:Synchronized
   private val readyAsyncCalls = ArrayDeque<AsyncCall>()
 
   /** Running asynchronous calls. Includes canceled calls that haven't finished yet. */
@@ -112,20 +116,25 @@ class Dispatcher constructor() {
   }
 
   internal fun enqueue(call: AsyncCall) {
+    //加锁，保证线程安全
     synchronized(this) {
+      //将该请求调用加入到 readyAsyncCalls 队列中
       readyAsyncCalls.add(call)
 
       // Mutate the AsyncCall so that it shares the AtomicInteger of an existing running call to
       // the same host.
       if (!call.call.forWebSocket) {
+        //通过域名来查找有没有相同域名的请求，有则复用。
         val existingCall = findExistingCallWithHost(call.host)
         if (existingCall != null) call.reuseCallsPerHostFrom(existingCall)
       }
     }
+    //执行请求
     promoteAndExecute()
   }
 
   private fun findExistingCallWithHost(host: String): AsyncCall? {
+    //是在runningAsyncCalls 与 readyAsyncCalls 队列中进行查找
     for (existingCall in runningAsyncCalls) {
       if (existingCall.host == host) return existingCall
     }
@@ -162,23 +171,30 @@ class Dispatcher constructor() {
     this.assertThreadDoesntHoldLock()
 
     val executableCalls = mutableListOf<AsyncCall>()
+    //判断是否有请求正在执行
     val isRunning: Boolean
+    //加锁，保证线程安全
     synchronized(this) {
+      //遍历 readyAsyncCalls 队列
       val i = readyAsyncCalls.iterator()
       while (i.hasNext()) {
         val asyncCall = i.next()
-
+        //runningAsyncCalls 的数量不能大于最大并发请求数 64
         if (runningAsyncCalls.size >= this.maxRequests) break // Max capacity.
+        //同域名最大请求数5，同一个域名最多允许5条线程同时执行请求
         if (asyncCall.callsPerHost.get() >= this.maxRequestsPerHost) continue // Host max capacity.
 
+        //从 readyAsyncCalls 队列中移除，并加入到 executableCalls 及 runningAsyncCalls 队列中
         i.remove()
         asyncCall.callsPerHost.incrementAndGet()
         executableCalls.add(asyncCall)
         runningAsyncCalls.add(asyncCall)
       }
+      //通过运行队列中的请求数量来判断是否有请求正在执行
       isRunning = runningCallsCount() > 0
     }
 
+    //遍历可执行队列，调用线程池来执行AsyncCall
     for (i in 0 until executableCalls.size) {
       val asyncCall = executableCalls[i]
       asyncCall.executeOn(executorService)
@@ -192,13 +208,17 @@ class Dispatcher constructor() {
     runningSyncCalls.add(call)
   }
 
-  /** Used by [AsyncCall.run] to signal completion. */
+  /** Used by [AsyncCall.run] to signal completion.
+   * 异步请求调用结束方法
+   */
   internal fun finished(call: AsyncCall) {
     call.callsPerHost.decrementAndGet()
     finished(runningAsyncCalls, call)
   }
 
-  /** Used by [Call.execute] to signal completion. */
+  /** Used by [Call.execute] to signal completion.
+   * 同步请求调用结束方法
+   */
   internal fun finished(call: RealCall) {
     finished(runningSyncCalls, call)
   }
@@ -206,13 +226,16 @@ class Dispatcher constructor() {
   private fun <T> finished(calls: Deque<T>, call: T) {
     val idleCallback: Runnable?
     synchronized(this) {
+      //将当前请求调用从 正在运行队列 中移除
       if (!calls.remove(call)) throw AssertionError("Call wasn't in-flight!")
       idleCallback = this.idleCallback
     }
 
+    //继续执行剩余请求
     val isRunning = promoteAndExecute()
 
     if (!isRunning && idleCallback != null) {
+      //如果执行完了所有请求，处于闲置状态，调用闲置回调方法
       idleCallback.run()
     }
   }

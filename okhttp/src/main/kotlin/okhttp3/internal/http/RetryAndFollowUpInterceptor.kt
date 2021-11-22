@@ -63,6 +63,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     var newExchangeFinder = true
     var recoveredFailures = listOf<IOException>()
     while (true) {
+      //这里会新建一个ExchangeFinder，ConnectInterceptor会使用到
       call.enterNetworkInterceptorExchange(request, newExchangeFinder)
 
       var response: Response
@@ -73,10 +74,12 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
         }
 
         try {
+          //执行下一个拦截器来处理请求
           response = realChain.proceed(request)
           newExchangeFinder = true
         } catch (e: RouteException) {
           // The attempt to connect via a route failed. The request will not have been sent.
+          // 尝试通过路由连接失败。 该请求将不会被发送。
           if (!recover(e.lastConnectException, call, request, requestSendStarted = false)) {
             throw e.firstConnectException.withSuppressed(recoveredFailures)
           } else {
@@ -86,6 +89,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
           continue
         } catch (e: IOException) {
           // An attempt to communicate with a server failed. The request may have been sent.
+          //尝试与服务器通信失败。 该请求可能已发送。
           if (!recover(e, call, request, requestSendStarted = e !is ConnectionShutdownException)) {
             throw e.withSuppressed(recoveredFailures)
           } else {
@@ -96,6 +100,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
         }
 
         // Attach the prior response if it exists. Such responses never have a body.
+        //尝试关联上一个response，注意：body是为null
         if (priorResponse != null) {
           response = response.newBuilder()
               .priorResponse(priorResponse.newBuilder()
@@ -105,6 +110,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
         }
 
         val exchange = call.interceptorScopedExchange
+        //会根据 responseCode 来判断，构建一个新的request并返回来重试或者重定向
         val followUp = followUpRequest(response, exchange)
 
         if (followUp == null) {
@@ -114,7 +120,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
           closeActiveExchange = false
           return response
         }
-
+        //如果请求体是一次性的，不需要再次重试
         val followUpBody = followUp.body
         if (followUpBody != null && followUpBody.isOneShot()) {
           closeActiveExchange = false
@@ -123,6 +129,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
 
         response.body?.closeQuietly()
 
+        //最大重试次数，不同的浏览器是不同的，比如：Chrome为21，Safari则是16
         if (++followUpCount > MAX_FOLLOW_UPS) {
           throw ProtocolException("Too many follow-up requests: $followUpCount")
         }
@@ -140,6 +147,8 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
    * `e` is recoverable, or false if the failure is permanent. Requests with a body can only
    * be recovered if the body is buffered or if the failure occurred before the request has been
    * sent.
+   *
+   * 判断是否要进行重连，false->不尝试重连；true->尝试重连。
    */
   private fun recover(
     e: IOException,
@@ -148,18 +157,23 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     requestSendStarted: Boolean
   ): Boolean {
     // The application layer has forbidden retries.
+    //客户端禁止重试
     if (!client.retryOnConnectionFailure) return false
 
     // We can't send the request body again.
+    //不能再次发送该请求体
     if (requestSendStarted && requestIsOneShot(e, userRequest)) return false
 
     // This exception is fatal.
+    //发生的异常是致命的，无法恢复，如:ProtocolException
     if (!isRecoverable(e, requestSendStarted)) return false
 
     // No more routes to attempt.
+    //没有更多的路由来尝试重连
     if (!call.retryAfterFailure()) return false
 
     // For failure recovery, use the same route selector with a new connection.
+    // 对于失败恢复，使用带有新连接的相同路由选择器
     return true
   }
 
@@ -204,6 +218,8 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
    * Figures out the HTTP request to make in response to receiving [userResponse]. This will
    * either add authentication headers, follow redirects or handle a client request timeout. If a
    * follow-up is either unnecessary or not applicable, this returns null.
+   *
+   * 根据 responseCode 来判断，构建一个新的request并返回来重试或者重定向
    */
   @Throws(IOException::class)
   private fun followUpRequest(userResponse: Response, exchange: Exchange?): Request? {

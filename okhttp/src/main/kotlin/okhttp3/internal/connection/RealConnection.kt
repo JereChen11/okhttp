@@ -81,6 +81,9 @@ import okio.source
  *
  *  2. Once connected, a connection is shared to a connection pool. In this phase accesses to the
  *     connection's state must be guarded by holding a lock on the connection.
+ *
+ *
+ *
  */
 class RealConnection(
   val connectionPool: RealConnectionPool,
@@ -529,9 +532,11 @@ class RealConnection(
     assertThreadHoldsLock()
 
     // If this connection is not accepting new exchanges, we're done.
+    //如果当前连接不支持新的交换
     if (calls.size >= allocationLimit || noNewExchanges) return false
 
     // If the non-host fields of the address don't overlap, we're done.
+    //如果address的非域名字段没有重叠
     if (!this.route.address.equalsNonHost(address)) return false
 
     // If the host exactly matches, we're done: this connection can carry the address.
